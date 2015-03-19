@@ -1,0 +1,303 @@
+/*
+ * Copyright (c) 2013 Jan-Piet Mens <jpmens()gmail.com> wendal <wendal1985()gmai.com>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of mosquitto nor the names of its
+ *    contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#ifdef BE_HTTP
+#include "backends.h"
+#include "be-http.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "hash.h"
+#include "log.h"
+#include "envs.h"
+#include <curl/curl.h>
+
+static int get_envs_url(CURL *curl, const char *sys_envs, char *envs_url)
+{
+	char *data;
+	char *escaped_key;
+	char *escaped_envvalue;
+	
+	char *params_key[MAXPARAMSNUM];
+	char *env_names[MAXPARAMSNUM];
+	char *env_value[MAXPARAMSNUM];
+	int i,cnt = 0;
+	int ok = FALSE;
+	cnt = get_sys_envs(sys_envs, ",", "=", params_key, env_names, env_value);
+	for( i = 0; i < cnt; i++ ){
+		escaped_key = curl_easy_escape(curl, params_key[i], 0);
+		escaped_envvalue = curl_easy_escape(curl, env_value[i], 0);
+		data = (char *)malloc(strlen(escaped_key) + strlen(escaped_envvalue) + 50);
+		if (data == NULL) {
+			_fatal("ENOMEM");
+			return (FALSE);
+		}
+		sprintf(data, "%s=%s&",
+		escaped_key,
+		escaped_envvalue);
+		strcat(envs_url, data);
+	}
+
+	free(data);
+	free(escaped_key);
+	free(escaped_envvalue);
+	//free(params_key);
+	//free(env_names);
+	//free(env_value);
+	ok = TRUE;
+	return (ok);
+}
+
+static int http_post(void *handle, char *uri, const char *clientid, const char *username,const char *password, const char *topic, int acc, int method)
+{
+	struct http_backend *conf = (struct http_backend *)handle;
+	CURL *curl;
+	struct curl_slist *headerlist=NULL;
+	int re;
+	int respCode = 0;
+	int ok = FALSE;
+	char *url;
+	char *data;
+	char *envs_url;
+
+	if (username == NULL) {
+		return (FALSE);
+	}
+
+	envs_url = (char *)malloc(MAXPARAMSLEN);
+	if (envs_url == NULL) {
+		_fatal("ENOMEM");
+		return (FALSE);
+	}
+	
+	clientid = (clientid && *clientid) ? clientid : "";
+	password = (password && *password) ? password : "";
+	topic    = (topic && *topic) ? topic : "";
+
+	if ((curl = curl_easy_init()) == NULL) {
+		_fatal("create curl_easy_handle fails");
+		return (FALSE);
+	}
+	if (conf->hostheader != NULL)
+		curl_slist_append(headerlist, conf->hostheader);
+	curl_slist_append(headerlist, "Expect:");
+		
+	//_log(LOG_NOTICE, "u=%s p=%s t=%s acc=%d", username, password, topic, acc);
+	
+	url = (char *)malloc(strlen(conf->ip) + strlen(uri) + 20);
+	if (url == NULL) {
+		_fatal("ENOMEM");
+		return (FALSE);
+	}
+	sprintf(url, "http://%s:%d%s", conf->ip, conf->port, uri);
+	
+	//get the sys_env from here
+	int flag = FALSE;
+	if ( method == METHOD_GETUSER && conf->getuser_envs != NULL ){
+		flag = get_envs_url(curl, conf->getuser_envs, envs_url);
+		if( !flag ){
+			return (FALSE);
+		}
+	} else if ( method == METHOD_SUPERUSER && conf->superuser_envs != NULL ){
+		flag = get_envs_url(curl, conf->superuser_envs, envs_url);
+		if( !flag ){
+			return (FALSE);
+		}
+	} else if ( method == METHOD_ACLCHECK && conf->aclcheck_envs != NULL ){
+		flag = get_envs_url(curl, conf->aclcheck_envs, envs_url);
+		if( !flag ){
+			return (FALSE);
+		}
+	}
+	//---- over ----
+	
+	char* escaped_username = curl_easy_escape(curl, username, 0);
+	char* escaped_password = curl_easy_escape(curl, password, 0);
+	char* escaped_topic = curl_easy_escape(curl, topic, 0);
+	char* escaped_clientid = curl_easy_escape(curl, clientid, 0);
+
+	char string_acc[20];
+	snprintf(string_acc, 20, "%d", acc);
+	
+	data = (char *)malloc(strlen(envs_url) + strlen(escaped_username) + strlen(escaped_password) + strlen(escaped_topic) + strlen(string_acc) + strlen(escaped_clientid) + 50);
+	if (data == NULL) {
+		_fatal("ENOMEM");
+		return (FALSE);
+	}
+	sprintf(data, "%susername=%s&password=%s&topic=%s&acc=%s&clientid=%s",
+		envs_url,
+		escaped_username,
+		escaped_password,
+		escaped_topic,
+		string_acc,
+		clientid);
+
+	_log(LOG_DEBUG, "url=%s", url);
+	// curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+
+	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_POST, 1L);
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
+	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerlist);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10);
+	
+	re = curl_easy_perform(curl);
+	if (re == CURLE_OK) {
+		re = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &respCode);
+		if (re == CURLE_OK && respCode == 200) {
+			ok = TRUE;
+		} else {
+			//_log(LOG_NOTICE, "http auth fail re=%d respCode=%d", re, respCode);
+		}
+	} else {
+		_log(LOG_DEBUG, "http req fail url=%s re=%s", url, curl_easy_strerror(re));
+	}
+	
+	curl_easy_cleanup(curl);
+	curl_slist_free_all (headerlist);
+	free(url);
+	free(data);
+	free(envs_url);
+	free(escaped_username);
+	free(escaped_password);
+	free(escaped_topic);
+	free(escaped_clientid);
+	return (ok);
+}
+
+void *be_http_init()
+{
+	struct http_backend *conf;
+	char *ip;
+	char *getuser_uri;
+	char *superuser_uri;
+	char *aclcheck_uri;
+	
+	if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK) {
+		_fatal("init curl fail");
+		return (NULL);
+	}
+	
+	if ((ip = p_stab("http_ip")) == NULL) {
+		_fatal("Mandatory parameter `http_ip' missing");
+		return (NULL);
+	}
+	if ((getuser_uri = p_stab("http_getuser_uri")) == NULL) {
+		_fatal("Mandatory parameter `http_getuser_uri' missing");
+		return (NULL);
+	}
+	if ((superuser_uri = p_stab("http_superuser_uri")) == NULL) {
+		_fatal("Mandatory parameter `http_superuser_uri' missing");
+		return (NULL);
+	}
+	if ((aclcheck_uri = p_stab("http_aclcheck_uri")) == NULL) {
+		_fatal("Mandatory parameter `http_aclcheck_uri' missing");
+		return (NULL);
+	}
+	
+	conf = (struct http_backend *)malloc(sizeof(struct http_backend));
+	conf->ip = ip;
+	conf->port = p_stab("http_port") == NULL ? 80 : atoi(p_stab("http_port"));
+	if (p_stab("http_hostname") != NULL) {
+		conf->hostheader = (char *)malloc(128);
+		sprintf(conf->hostheader, "Host: %s", p_stab("http_hostname"));
+	} else {
+		conf->hostheader = NULL;
+	}
+	conf->getuser_uri = getuser_uri;
+	conf->superuser_uri = superuser_uri;
+	conf->aclcheck_uri = aclcheck_uri;
+	
+	if (p_stab("http_getuser_params") != NULL) {
+		conf->getuser_envs = (char *)malloc(128);
+		sprintf(conf->getuser_envs, "auth_opt_env: %s", p_stab("http_getuser_params"));
+	} else {
+		conf->getuser_envs = NULL;
+	}
+	
+	if (p_stab("http_superuser_params") != NULL) {
+		conf->superuser_envs = (char *)malloc(128);
+		sprintf(conf->superuser_envs, "auth_opt_http_superuser_params: %s", p_stab("http_superuser_params"));
+	} else {
+		conf->superuser_envs = NULL;
+	}
+	
+	if (p_stab("http_aclcheck_params") != NULL) {
+		conf->aclcheck_envs = (char *)malloc(128);
+		sprintf(conf->aclcheck_envs, "auth_opt_env: %s", p_stab("http_aclcheck_params"));
+	} else {
+		conf->aclcheck_envs = NULL;
+	}
+	
+	_log(LOG_DEBUG, "getuser_uri=%s", getuser_uri);
+	_log(LOG_DEBUG, "superuser_uri=%s", superuser_uri);
+	_log(LOG_DEBUG, "aclcheck_uri=%s", aclcheck_uri);
+	_log(LOG_DEBUG, "getuser_params=%s", conf->getuser_envs);
+	_log(LOG_DEBUG, "superuser_params=%s", conf->superuser_envs);
+	_log(LOG_DEBUG, "aclcheck_paramsi=%s", conf->aclcheck_envs);
+	
+	return (conf);
+};
+void be_http_destroy(void *handle)
+{
+	struct http_backend *conf = (struct http_backend *)handle;
+
+	if (conf) {
+		curl_global_cleanup();
+		free(conf);
+	}
+};
+
+char *be_http_getuser(void *handle, const char *username, const char *password, int *authenticated) {
+	struct http_backend *conf = (struct http_backend *)handle;
+	int re;
+	if (username == NULL) {
+		return NULL;
+	}
+	re = http_post(handle, conf->getuser_uri, NULL, username, password, NULL, -1, METHOD_GETUSER);
+	if (re == 1) {
+		*authenticated = 1;
+	}
+	return NULL;
+};
+
+int be_http_superuser(void *handle, const char *username)
+{
+	struct http_backend *conf = (struct http_backend *)handle;
+
+	return http_post(handle, conf->superuser_uri, NULL, username, NULL, NULL, -1, METHOD_SUPERUSER);
+};
+
+int be_http_aclcheck(void *handle, const char *clientid, const char *username, const char *topic, int acc)
+{
+	struct http_backend *conf = (struct http_backend *)handle;
+
+	return http_post(conf, conf->aclcheck_uri, clientid, username, NULL, topic, acc, METHOD_ACLCHECK);
+};
+#endif /* BE_HTTP */
