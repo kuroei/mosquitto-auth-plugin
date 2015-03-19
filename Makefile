@@ -116,7 +116,7 @@ printconfig:
 auth-plug.so : $(OBJS) $(BE_DEPS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -fPIC -shared -o $@ $(OBJS) $(BE_DEPS) $(LDADD)
 
-be-redis.o: be-redis.c be-redis.h log.h hash.h Makefile
+be-redis.o: be-redis.c be-redis.h log.h hash.h envs.h Makefile
 be-sqlite.o: be-sqlite.c be-sqlite.h Makefile
 auth-plug.o: auth-plug.c be-cdb.h be-mysql.h be-sqlite.h Makefile cache.h
 be-psk.o: be-psk.c be-psk.h Makefile

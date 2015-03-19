@@ -35,9 +35,46 @@
 #include <string.h>
 #include "hash.h"
 #include "log.h"
+#include "envs.h"
 #include <curl/curl.h>
 
-static int http_post(void *handle, char *uri, const char *clientid, const char *username,const char *password, const char *topic, int acc)
+static int get_envs_url(CURL *curl, const char *sys_envs, char *envs_url)
+{
+	char *data;
+	char *escaped_key;
+	char *escaped_envvalue;
+	
+	char *params_key[MAXPARAMSNUM];
+	char *env_names[MAXPARAMSNUM];
+	char *env_value[MAXPARAMSNUM];
+	int i,cnt = 0;
+	int ok = FALSE;
+	cnt = get_sys_envs(sys_envs, ",", "=", params_key, env_names, env_value);
+	for( i = 0; i < cnt; i++ ){
+		escaped_key = curl_easy_escape(curl, params_key[i], 0);
+		escaped_envvalue = curl_easy_escape(curl, env_value[i], 0);
+		data = (char *)malloc(strlen(escaped_key) + strlen(escaped_envvalue) + 50);
+		if (data == NULL) {
+			_fatal("ENOMEM");
+			return (FALSE);
+		}
+		sprintf(data, "%s=%s&",
+		escaped_key,
+		escaped_envvalue);
+		strcat(envs_url, data);
+	}
+
+	free(data);
+	free(escaped_key);
+	free(escaped_envvalue);
+	//free(params_key);
+	//free(env_names);
+	//free(env_value);
+	ok = TRUE;
+	return (ok);
+}
+
+static int http_post(void *handle, char *uri, const char *clientid, const char *username,const char *password, const char *topic, int acc, int method)
 {
 	struct http_backend *conf = (struct http_backend *)handle;
 	CURL *curl;
@@ -47,11 +84,18 @@ static int http_post(void *handle, char *uri, const char *clientid, const char *
 	int ok = FALSE;
 	char *url;
 	char *data;
+	char *envs_url;
 
 	if (username == NULL) {
 		return (FALSE);
 	}
 
+	envs_url = (char *)malloc(MAXPARAMSLEN);
+	if (envs_url == NULL) {
+		_fatal("ENOMEM");
+		return (FALSE);
+	}
+	
 	clientid = (clientid && *clientid) ? clientid : "";
 	password = (password && *password) ? password : "";
 	topic    = (topic && *topic) ? topic : "";
@@ -73,19 +117,41 @@ static int http_post(void *handle, char *uri, const char *clientid, const char *
 	}
 	sprintf(url, "http://%s:%d%s", conf->ip, conf->port, uri);
 	
+	//get the sys_env from here
+	int flag = FALSE;
+	if ( method == METHOD_GETUSER && conf->getuser_envs != NULL ){
+		flag = get_envs_url(curl, conf->getuser_envs, envs_url);
+		if( !flag ){
+			return (FALSE);
+		}
+	} else if ( method == METHOD_SUPERUSER && conf->superuser_envs != NULL ){
+		flag = get_envs_url(curl, conf->superuser_envs, envs_url);
+		if( !flag ){
+			return (FALSE);
+		}
+	} else if ( method == METHOD_ACLCHECK && conf->aclcheck_envs != NULL ){
+		flag = get_envs_url(curl, conf->aclcheck_envs, envs_url);
+		if( !flag ){
+			return (FALSE);
+		}
+	}
+	//---- over ----
+	
 	char* escaped_username = curl_easy_escape(curl, username, 0);
 	char* escaped_password = curl_easy_escape(curl, password, 0);
 	char* escaped_topic = curl_easy_escape(curl, topic, 0);
 	char* escaped_clientid = curl_easy_escape(curl, clientid, 0);
+
 	char string_acc[20];
 	snprintf(string_acc, 20, "%d", acc);
 	
-	data = (char *)malloc(strlen(escaped_username) + strlen(escaped_password) + strlen(escaped_topic) + strlen(string_acc) + strlen(escaped_clientid) + 50);
+	data = (char *)malloc(strlen(envs_url) + strlen(escaped_username) + strlen(escaped_password) + strlen(escaped_topic) + strlen(string_acc) + strlen(escaped_clientid) + 50);
 	if (data == NULL) {
 		_fatal("ENOMEM");
 		return (FALSE);
 	}
-	sprintf(data, "username=%s&password=%s&topic=%s&acc=%s&clientid=%s",
+	sprintf(data, "%susername=%s&password=%s&topic=%s&acc=%s&clientid=%s",
+		envs_url,
 		escaped_username,
 		escaped_password,
 		escaped_topic,
@@ -117,13 +183,13 @@ static int http_post(void *handle, char *uri, const char *clientid, const char *
 	curl_slist_free_all (headerlist);
 	free(url);
 	free(data);
+	free(envs_url);
 	free(escaped_username);
 	free(escaped_password);
 	free(escaped_topic);
 	free(escaped_clientid);
 	return (ok);
 }
-
 
 void *be_http_init()
 {
@@ -154,6 +220,7 @@ void *be_http_init()
 		_fatal("Mandatory parameter `http_aclcheck_uri' missing");
 		return (NULL);
 	}
+	
 	conf = (struct http_backend *)malloc(sizeof(struct http_backend));
 	conf->ip = ip;
 	conf->port = p_stab("http_port") == NULL ? 80 : atoi(p_stab("http_port"));
@@ -167,9 +234,33 @@ void *be_http_init()
 	conf->superuser_uri = superuser_uri;
 	conf->aclcheck_uri = aclcheck_uri;
 	
+	if (p_stab("http_getuser_params") != NULL) {
+		conf->getuser_envs = (char *)malloc(128);
+		sprintf(conf->getuser_envs, "auth_opt_env: %s", p_stab("http_getuser_params"));
+	} else {
+		conf->getuser_envs = NULL;
+	}
+	
+	if (p_stab("http_superuser_params") != NULL) {
+		conf->superuser_envs = (char *)malloc(128);
+		sprintf(conf->superuser_envs, "auth_opt_http_superuser_params: %s", p_stab("http_superuser_params"));
+	} else {
+		conf->superuser_envs = NULL;
+	}
+	
+	if (p_stab("http_aclcheck_params") != NULL) {
+		conf->aclcheck_envs = (char *)malloc(128);
+		sprintf(conf->aclcheck_envs, "auth_opt_env: %s", p_stab("http_aclcheck_params"));
+	} else {
+		conf->aclcheck_envs = NULL;
+	}
+	
 	_log(LOG_DEBUG, "getuser_uri=%s", getuser_uri);
 	_log(LOG_DEBUG, "superuser_uri=%s", superuser_uri);
 	_log(LOG_DEBUG, "aclcheck_uri=%s", aclcheck_uri);
+	_log(LOG_DEBUG, "getuser_params=%s", conf->getuser_envs);
+	_log(LOG_DEBUG, "superuser_params=%s", conf->superuser_envs);
+	_log(LOG_DEBUG, "aclcheck_paramsi=%s", conf->aclcheck_envs);
 	
 	return (conf);
 };
@@ -189,7 +280,7 @@ char *be_http_getuser(void *handle, const char *username, const char *password, 
 	if (username == NULL) {
 		return NULL;
 	}
-	re = http_post(handle, conf->getuser_uri, NULL, username, password, NULL, -1);
+	re = http_post(handle, conf->getuser_uri, NULL, username, password, NULL, -1, METHOD_GETUSER);
 	if (re == 1) {
 		*authenticated = 1;
 	}
@@ -200,13 +291,13 @@ int be_http_superuser(void *handle, const char *username)
 {
 	struct http_backend *conf = (struct http_backend *)handle;
 
-	return http_post(handle, conf->superuser_uri, NULL, username, NULL, NULL, -1);
+	return http_post(handle, conf->superuser_uri, NULL, username, NULL, NULL, -1, METHOD_SUPERUSER);
 };
 
 int be_http_aclcheck(void *handle, const char *clientid, const char *username, const char *topic, int acc)
 {
 	struct http_backend *conf = (struct http_backend *)handle;
 
-	return http_post(conf, conf->aclcheck_uri, clientid, username, NULL, topic, acc);
+	return http_post(conf, conf->aclcheck_uri, clientid, username, NULL, topic, acc, METHOD_ACLCHECK);
 };
 #endif /* BE_HTTP */
