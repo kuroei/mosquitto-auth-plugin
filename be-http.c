@@ -38,58 +38,53 @@
 #include "envs.h"
 #include <curl/curl.h>
 
-static int get_envs_url(CURL *curl, const char *sys_envs, char *envs_url)
+static int get_string_env(CURL *curl, const char *required_env, char *querystring)
 {
 	char *data;
 	char *escaped_key;
-	char *escaped_envvalue;
-	char *temp_envs;
-	
+	char *escaped_val;
+	char *env_string;
+
 	char *params_key[MAXPARAMSNUM];
 	char *env_names[MAXPARAMSNUM];
 	char *env_value[MAXPARAMSNUM];
-	int i,cnt = 0;
+	int i, num = 0;
 	int ok = FALSE;
-	
+
 	//_log(LOG_DEBUG, "sys_envs=%s", sys_envs);
-	
-	temp_envs = (char *)malloc( strlen(sys_envs) + 20);
-	if (temp_envs == NULL) {
+
+	env_string = (char *)malloc( strlen(required_env) + 20);
+	if (env_string == NULL) {
 		_fatal("ENOMEM");
 		return (FALSE);
 	}
-	sprintf(temp_envs, "%s", sys_envs);
-	
-	//_log(LOG_DEBUG, "temp_envs=%s", temp_envs);
-	
-	cnt = get_sys_envs(temp_envs, ",", "=", params_key, env_names, env_value);
-	for( i = 0; i < cnt; i++ ){
+	sprintf(env_string, "%s", sys_envs);
+
+	//_log(LOG_DEBUG, "env_string=%s", env_string);
+
+	num = get_sys_envs(env_string, ",", "=", params_key, env_names, env_value);
+	sprintf(querystring, "");
+	for( i = 0; i < num; i++ ){
 		escaped_key = curl_easy_escape(curl, params_key[i], 0);
-		escaped_envvalue = curl_easy_escape(curl, env_value[i], 0);
-		
+		escaped_val = curl_easy_escape(curl, env_value[i], 0);
+
 		//_log(LOG_DEBUG, "key=%s", params_key[i]);
 		//_log(LOG_DEBUG, "escaped_key=%s", escaped_key);
-		//_log(LOG_DEBUG, "escaped_envvalue=%s", escaped_envvalue);
-		
-		data = (char *)malloc(strlen(escaped_key) + strlen(escaped_envvalue) + 1);
+		//_log(LOG_DEBUG, "escaped_val=%s", escaped_envvalue);
+
+		data = (char *)malloc(strlen(escaped_key) + strlen(escaped_val) + 1);
 		if ( data == NULL ) {
 			_fatal("ENOMEM");
 			return (FALSE);
 		}
-		sprintf(data, "%s=%s&",
-		escaped_key,
-		escaped_envvalue);
-		if ( i == 0 ) {
-			sprintf(envs_url, "%s", data);
-		} else {
-			strcat(envs_url, data);
-		}
+		sprintf(data, "%s=%s&", escaped_key, escaped_val);
+		strcat(querystring, data);
 	}
 
 	free(data);
 	free(escaped_key);
-	free(escaped_envvalue);
-	free(temp_envs);
+	free(escaped_val);
+	free(env_string);
 	//free(params_key);
 	//free(env_names);
 	//free(env_value);
@@ -97,7 +92,7 @@ static int get_envs_url(CURL *curl, const char *sys_envs, char *envs_url)
 	return (ok);
 }
 
-static int http_post(void *handle, char *uri, const char *clientid, const char *username,const char *password, const char *topic, int acc, int method)
+static int http_post(void *handle, char *uri, const char *clientid, const char *username, const char *password, const char *topic, int acc, int method)
 {
 	struct http_backend *conf = (struct http_backend *)handle;
 	CURL *curl;
@@ -107,18 +102,11 @@ static int http_post(void *handle, char *uri, const char *clientid, const char *
 	int ok = FALSE;
 	char *url;
 	char *data;
-	char *envs_url;
 
 	if (username == NULL) {
 		return (FALSE);
 	}
 
-	envs_url = (char *)malloc(MAXPARAMSLEN);
-	if (envs_url == NULL) {
-		_fatal("ENOMEM");
-		return (FALSE);
-	}
-	
 	clientid = (clientid && *clientid) ? clientid : "";
 	password = (password && *password) ? password : "";
 	topic    = (topic && *topic) ? topic : "";
@@ -130,36 +118,16 @@ static int http_post(void *handle, char *uri, const char *clientid, const char *
 	if (conf->hostheader != NULL)
 		curl_slist_append(headerlist, conf->hostheader);
 	curl_slist_append(headerlist, "Expect:");
-		
+
 	//_log(LOG_NOTICE, "u=%s p=%s t=%s acc=%d", username, password, topic, acc);
-	
+
 	url = (char *)malloc(strlen(conf->ip) + strlen(uri) + 20);
 	if (url == NULL) {
 		_fatal("ENOMEM");
 		return (FALSE);
 	}
 	sprintf(url, "http://%s:%d%s", conf->ip, conf->port, uri);
-	
-	//get the sys_env from here
-	int flag = FALSE;
-	if ( method == METHOD_GETUSER && conf->getuser_envs != NULL ){
-		flag = get_envs_url(curl, conf->getuser_envs, envs_url);
-		if( !flag ){
-			return (FALSE);
-		}
-	} else if ( method == METHOD_SUPERUSER && conf->superuser_envs != NULL ){
-		flag = get_envs_url(curl, conf->superuser_envs, envs_url);
-		if( !flag ){
-			return (FALSE);
-		}
-	} else if ( method == METHOD_ACLCHECK && conf->aclcheck_envs != NULL ){
-		flag = get_envs_url(curl, conf->aclcheck_envs, envs_url);
-		if( !flag ){
-			return (FALSE);
-		}
-	}
-	//---- over ----
-	
+
 	char* escaped_username = curl_easy_escape(curl, username, 0);
 	char* escaped_password = curl_easy_escape(curl, password, 0);
 	char* escaped_topic = curl_easy_escape(curl, topic, 0);
@@ -167,20 +135,36 @@ static int http_post(void *handle, char *uri, const char *clientid, const char *
 
 	char string_acc[20];
 	snprintf(string_acc, 20, "%d", acc);
-	
-	data = (char *)malloc(strlen(envs_url) + strlen(escaped_username) + strlen(escaped_password) + strlen(escaped_topic) + strlen(string_acc) + strlen(escaped_clientid) + 50);
+
+	char string_envs[MAXPARAMSLEN];
+	//get the sys_env from here
+	int flag = FALSE;
+	if ( method == METHOD_GETUSER && conf->getuser_envs != NULL ){
+		flag = get_string_envs(curl, conf->getuser_envs, string_envs);
+	}else if ( method == METHOD_SUPERUSER && conf->superuser_envs != NULL ){
+		flag = get_string_envs(curl, conf->superuser_envs, string_envs);
+	} else if ( method == METHOD_ACLCHECK && conf->aclcheck_envs != NULL ){
+		flag = get_string_envs(curl, conf->aclcheck_envs, string_envs);
+	}
+	if( !flag ){
+		return (FALSE);
+	}
+	//---- over ----
+
+
+	data = (char *)malloc(strlen(string_envs) + strlen(escaped_username) + strlen(escaped_password) + strlen(escaped_topic) + strlen(string_acc) + strlen(escaped_clientid) + 50);
 	if (data == NULL) {
 		_fatal("ENOMEM");
 		return (FALSE);
 	}
 	sprintf(data, "%susername=%s&password=%s&topic=%s&acc=%s&clientid=%s",
-		envs_url,
+		string_envs,
 		escaped_username,
 		escaped_password,
 		escaped_topic,
 		string_acc,
 		clientid);
-	
+
 	_log(LOG_DEBUG, "url=%s", url);
 	_log(LOG_DEBUG, "data=%s", data);
 	// curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
@@ -190,7 +174,7 @@ static int http_post(void *handle, char *uri, const char *clientid, const char *
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerlist);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10);
-	
+
 	re = curl_easy_perform(curl);
 	if (re == CURLE_OK) {
 		re = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &respCode);
@@ -202,12 +186,12 @@ static int http_post(void *handle, char *uri, const char *clientid, const char *
 	} else {
 		_log(LOG_DEBUG, "http req fail url=%s re=%s", url, curl_easy_strerror(re));
 	}
-	
+
 	curl_easy_cleanup(curl);
 	curl_slist_free_all (headerlist);
 	free(url);
 	free(data);
-	free(envs_url);
+	free(string_envs);
 	free(escaped_username);
 	free(escaped_password);
 	free(escaped_topic);
@@ -222,12 +206,12 @@ void *be_http_init()
 	char *getuser_uri;
 	char *superuser_uri;
 	char *aclcheck_uri;
-	
+
 	if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK) {
 		_fatal("init curl fail");
 		return (NULL);
 	}
-	
+
 	if ((ip = p_stab("http_ip")) == NULL) {
 		_fatal("Mandatory parameter `http_ip' missing");
 		return (NULL);
@@ -244,7 +228,7 @@ void *be_http_init()
 		_fatal("Mandatory parameter `http_aclcheck_uri' missing");
 		return (NULL);
 	}
-	
+
 	conf = (struct http_backend *)malloc(sizeof(struct http_backend));
 	conf->ip = ip;
 	conf->port = p_stab("http_port") == NULL ? 80 : atoi(p_stab("http_port"));
@@ -257,18 +241,18 @@ void *be_http_init()
 	conf->getuser_uri = getuser_uri;
 	conf->superuser_uri = superuser_uri;
 	conf->aclcheck_uri = aclcheck_uri;
-	
+
 	conf->getuser_envs = p_stab("http_getuser_params");
 	conf->superuser_envs = p_stab("http_superuser_params");
 	conf->aclcheck_envs = p_stab("http_aclcheck_params");
-		
+
 	_log(LOG_DEBUG, "getuser_uri=%s", getuser_uri);
 	_log(LOG_DEBUG, "superuser_uri=%s", superuser_uri);
 	_log(LOG_DEBUG, "aclcheck_uri=%s", aclcheck_uri);
 	_log(LOG_DEBUG, "getuser_params=%s", conf->getuser_envs);
 	_log(LOG_DEBUG, "superuser_params=%s", conf->superuser_envs);
 	_log(LOG_DEBUG, "aclcheck_paramsi=%s", conf->aclcheck_envs);
-	
+
 	return (conf);
 };
 void be_http_destroy(void *handle)
