@@ -134,7 +134,7 @@ static int http_post(void *handle, char *uri, const char *clientid, const char *
 	char string_acc[20];
 	snprintf(string_acc, 20, "%d", acc);
 
-	char string_envs = (char *)malloc(MAXPARAMSLEN);
+	char *string_envs = (char *)malloc(MAXPARAMSLEN);
 	if (string_envs == NULL) {
 		_fatal("ENOMEM");
 		return (FALSE);
