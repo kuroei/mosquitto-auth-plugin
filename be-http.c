@@ -43,30 +43,53 @@ static int get_envs_url(CURL *curl, const char *sys_envs, char *envs_url)
 	char *data;
 	char *escaped_key;
 	char *escaped_envvalue;
+	char *temp_envs;
 	
 	char *params_key[MAXPARAMSNUM];
 	char *env_names[MAXPARAMSNUM];
 	char *env_value[MAXPARAMSNUM];
 	int i,cnt = 0;
 	int ok = FALSE;
-	cnt = get_sys_envs(sys_envs, ",", "=", params_key, env_names, env_value);
+	
+	//_log(LOG_DEBUG, "sys_envs=%s", sys_envs);
+	
+	temp_envs = (char *)malloc( strlen(sys_envs) + 20);
+	if (temp_envs == NULL) {
+		_fatal("ENOMEM");
+		return (FALSE);
+	}
+	sprintf(temp_envs, "%s", sys_envs);
+	
+	//_log(LOG_DEBUG, "temp_envs=%s", temp_envs);
+	
+	cnt = get_sys_envs(temp_envs, ",", "=", params_key, env_names, env_value);
 	for( i = 0; i < cnt; i++ ){
 		escaped_key = curl_easy_escape(curl, params_key[i], 0);
 		escaped_envvalue = curl_easy_escape(curl, env_value[i], 0);
-		data = (char *)malloc(strlen(escaped_key) + strlen(escaped_envvalue) + 50);
-		if (data == NULL) {
+		
+		//_log(LOG_DEBUG, "key=%s", params_key[i]);
+		//_log(LOG_DEBUG, "escaped_key=%s", escaped_key);
+		//_log(LOG_DEBUG, "escaped_envvalue=%s", escaped_envvalue);
+		
+		data = (char *)malloc(strlen(escaped_key) + strlen(escaped_envvalue) + 1);
+		if ( data == NULL ) {
 			_fatal("ENOMEM");
 			return (FALSE);
 		}
 		sprintf(data, "%s=%s&",
 		escaped_key,
 		escaped_envvalue);
-		strcat(envs_url, data);
+		if ( i == 0 ) {
+			sprintf(envs_url, "%s", data);
+		} else {
+			strcat(envs_url, data);
+		}
 	}
 
 	free(data);
 	free(escaped_key);
 	free(escaped_envvalue);
+	free(temp_envs);
 	//free(params_key);
 	//free(env_names);
 	//free(env_value);
@@ -157,8 +180,9 @@ static int http_post(void *handle, char *uri, const char *clientid, const char *
 		escaped_topic,
 		string_acc,
 		clientid);
-
+	
 	_log(LOG_DEBUG, "url=%s", url);
+	_log(LOG_DEBUG, "data=%s", data);
 	// curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
 
 	curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -234,27 +258,10 @@ void *be_http_init()
 	conf->superuser_uri = superuser_uri;
 	conf->aclcheck_uri = aclcheck_uri;
 	
-	if (p_stab("http_getuser_params") != NULL) {
-		conf->getuser_envs = (char *)malloc(128);
-		sprintf(conf->getuser_envs, "auth_opt_env: %s", p_stab("http_getuser_params"));
-	} else {
-		conf->getuser_envs = NULL;
-	}
-	
-	if (p_stab("http_superuser_params") != NULL) {
-		conf->superuser_envs = (char *)malloc(128);
-		sprintf(conf->superuser_envs, "auth_opt_http_superuser_params: %s", p_stab("http_superuser_params"));
-	} else {
-		conf->superuser_envs = NULL;
-	}
-	
-	if (p_stab("http_aclcheck_params") != NULL) {
-		conf->aclcheck_envs = (char *)malloc(128);
-		sprintf(conf->aclcheck_envs, "auth_opt_env: %s", p_stab("http_aclcheck_params"));
-	} else {
-		conf->aclcheck_envs = NULL;
-	}
-	
+	conf->getuser_envs = p_stab("http_getuser_params");
+	conf->superuser_envs = p_stab("http_superuser_params");
+	conf->aclcheck_envs = p_stab("http_aclcheck_params");
+		
 	_log(LOG_DEBUG, "getuser_uri=%s", getuser_uri);
 	_log(LOG_DEBUG, "superuser_uri=%s", superuser_uri);
 	_log(LOG_DEBUG, "aclcheck_uri=%s", aclcheck_uri);
