@@ -38,7 +38,7 @@
 #include "envs.h"
 #include <curl/curl.h>
 
-static int get_string_env(CURL *curl, const char *required_env, char *querystring)
+static int get_string_envs(CURL *curl, const char *required_env, char *querystring)
 {
 	char *data;
 	char *escaped_key;
