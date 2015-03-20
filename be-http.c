@@ -49,14 +49,13 @@ static int get_string_env(CURL *curl, const char *required_env, char *querystrin
 	char *env_names[MAXPARAMSNUM];
 	char *env_value[MAXPARAMSNUM];
 	int i, num = 0;
-	int ok = FALSE;
 
 	//_log(LOG_DEBUG, "sys_envs=%s", sys_envs);
 
 	env_string = (char *)malloc( strlen(required_env) + 20);
 	if (env_string == NULL) {
 		_fatal("ENOMEM");
-		return (FALSE);
+		return (-1);
 	}
 	sprintf(env_string, "%s", sys_envs);
 
@@ -75,7 +74,7 @@ static int get_string_env(CURL *curl, const char *required_env, char *querystrin
 		data = (char *)malloc(strlen(escaped_key) + strlen(escaped_val) + 1);
 		if ( data == NULL ) {
 			_fatal("ENOMEM");
-			return (FALSE);
+			return (-1);
 		}
 		sprintf(data, "%s=%s&", escaped_key, escaped_val);
 		strcat(querystring, data);
@@ -88,8 +87,7 @@ static int get_string_env(CURL *curl, const char *required_env, char *querystrin
 	//free(params_key);
 	//free(env_names);
 	//free(env_value);
-	ok = TRUE;
-	return (ok);
+	return (num);
 }
 
 static int http_post(void *handle, char *uri, const char *clientid, const char *username, const char *password, const char *topic, int acc, int method)
@@ -138,19 +136,18 @@ static int http_post(void *handle, char *uri, const char *clientid, const char *
 
 	char string_envs[MAXPARAMSLEN];
 	//get the sys_env from here
-	int flag = FALSE;
+	int env_num = 0;
 	if ( method == METHOD_GETUSER && conf->getuser_envs != NULL ){
-		flag = get_string_envs(curl, conf->getuser_envs, string_envs);
+		env_num = get_string_envs(curl, conf->getuser_envs, string_envs);
 	}else if ( method == METHOD_SUPERUSER && conf->superuser_envs != NULL ){
-		flag = get_string_envs(curl, conf->superuser_envs, string_envs);
+		env_num = get_string_envs(curl, conf->superuser_envs, string_envs);
 	} else if ( method == METHOD_ACLCHECK && conf->aclcheck_envs != NULL ){
-		flag = get_string_envs(curl, conf->aclcheck_envs, string_envs);
+		env_num = get_string_envs(curl, conf->aclcheck_envs, string_envs);
 	}
-	if( !flag ){
+	if( env_num == -1 ){
 		return (FALSE);
 	}
 	//---- over ----
-
 
 	data = (char *)malloc(strlen(string_envs) + strlen(escaped_username) + strlen(escaped_password) + strlen(escaped_topic) + strlen(string_acc) + strlen(escaped_clientid) + 50);
 	if (data == NULL) {
