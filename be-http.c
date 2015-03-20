@@ -57,12 +57,12 @@ static int get_string_envs(CURL *curl, const char *required_env, char *querystri
 		_fatal("ENOMEM");
 		return (-1);
 	}
-	sprintf(env_string, "%s", sys_envs);
+	sprintf(env_string, "%s", required_env);
 
 	//_log(LOG_DEBUG, "env_string=%s", env_string);
 
 	num = get_sys_envs(env_string, ",", "=", params_key, env_names, env_value);
-	sprintf(querystring, "");
+	//sprintf(querystring, "");
 	for( i = 0; i < num; i++ ){
 		escaped_key = curl_easy_escape(curl, params_key[i], 0);
 		escaped_val = curl_easy_escape(curl, env_value[i], 0);
