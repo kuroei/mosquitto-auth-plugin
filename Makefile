@@ -127,6 +127,7 @@ be-sqlite.o: be-sqlite.c be-sqlite.h Makefile
 pbkdf2-check.o: pbkdf2-check.c base64.h Makefile
 base64.o: base64.c base64.h Makefile
 log.o: log.c log.h Makefile
+envs.o: envs.c envs.h Makefile
 hash.o: hash.c hash.h uthash.h Makefile
 be-postgres.o: be-postgres.c be-postgres.h Makefile
 cache.o: cache.c cache.h uthash.h Makefile
